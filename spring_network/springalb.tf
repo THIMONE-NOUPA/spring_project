@@ -5,8 +5,8 @@ resource "aws_security_group" "alb_security_group" {
   vpc_id = aws_vpc.spring_vpc.id
 
   ingress {
-    from_port   = 80
-    to_port     = 80
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -43,26 +43,42 @@ resource "aws_lb" "spring_alb" {
   }
 }
 
-# Listener for the ALB on HTTP
+resource "aws_lb_listener" "https_listener" {
+  load_balancer_arn = aws_lb.spring_alb.arn
+  port              = 443                         # Port HTTPS
+  protocol          = "HTTPS"                     # Protocole HTTPS
+  certificate_arn   = "arn:aws:acm:us-east-1:170631244365:certificate/a452746d-a401-41a1-806b-e1aa7a8c98e1"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.jenkins_target_group.arn
+  }
+}
+
 resource "aws_lb_listener" "http_listener" {
   load_balancer_arn = aws_lb.spring_alb.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
-    type = "forward"
-    target_group_arn = aws_lb_target_group.sonar_target_group.arn
+    type = "redirect"
+
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
   }
 }
 
 # Rule for SonarQube
 resource "aws_lb_listener_rule" "sonarqube_rule" {
-  listener_arn = aws_lb_listener.http_listener.arn
-  priority     = 100  # Ensure priority is unique and lower than other rules
+  listener_arn = aws_lb_listener.https_listener.arn
+  priority     = 10  # Ensure priority is unique and lower than other rules
 
   condition {
-    path_pattern {
-      values = ["/sonarqube"]  # Adjust the path as necessary
+    host_header {
+      values = ["sonarqube-server.thimone.com"]
     }
   }
 
@@ -74,12 +90,12 @@ resource "aws_lb_listener_rule" "sonarqube_rule" {
 
 # Rule for Jenkins (optional, since it is the default action)
 resource "aws_lb_listener_rule" "jenkins_rule" {
-  listener_arn = aws_lb_listener.http_listener.arn
-  priority     = 101  # Ensure priority is unique and higher than SonarQube
+  listener_arn = aws_lb_listener.https_listener.arn
+  priority     = 20  # Ensure priority is unique and higher than SonarQube
 
   condition {
-    path_pattern {
-      values = ["/jenkins"]  # Adjust the path as necessary
+    host_header {
+      values = ["jenkins-server.thimone.com"]
     }
   }
 
@@ -117,7 +133,7 @@ resource "aws_lb_target_group" "sonar_target_group" {
     health_check {
         port               = "9000"
         protocol           = "HTTP"
-        path               = "/"
+        path               = "/api/system/health"
         interval           = 30
         timeout            = 6
         healthy_threshold  = 2
